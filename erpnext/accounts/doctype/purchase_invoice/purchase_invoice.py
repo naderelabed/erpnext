@@ -669,9 +669,6 @@ class PurchaseInvoice(BuyingController):
 
 		exchange_rate_map, net_rate_map = get_purchase_document_details(self)
 
-		enable_discount_accounting = cint(
-			frappe.db.get_single_value("Buying Settings", "enable_discount_accounting")
-		)
 		provisional_accounting_for_non_stock_items = cint(
 			frappe.db.get_value(
 				"Company", self.company, "enable_provisional_accounting_for_non_stock_items"
@@ -708,6 +705,10 @@ class PurchaseInvoice(BuyingController):
 							)
 						)
 
+						credit_amount = item.base_net_amount
+						if self.is_internal_supplier and item.valuation_rate:
+							credit_amount = flt(item.valuation_rate * item.stock_qty)
+
 						# Intentionally passed negative debit amount to avoid incorrect GL Entry validation
 						gl_entries.append(
 							self.get_gl_dict(
@@ -717,7 +718,7 @@ class PurchaseInvoice(BuyingController):
 									"cost_center": item.cost_center,
 									"project": item.project or self.project,
 									"remarks": self.get("remarks") or _("Accounting Entry for Stock"),
-									"debit": -1 * flt(item.base_net_amount, item.precision("base_net_amount")),
+									"debit": -1 * flt(credit_amount, item.precision("base_net_amount")),
 								},
 								warehouse_account[item.from_warehouse]["account_currency"],
 								item=item,
@@ -1159,9 +1160,6 @@ class PurchaseInvoice(BuyingController):
 	def make_tax_gl_entries(self, gl_entries):
 		# tax table gl entries
 		valuation_tax = {}
-		enable_discount_accounting = cint(
-			frappe.db.get_single_value("Buying Settings", "enable_discount_accounting")
-		)
 
 		for tax in self.get("taxes"):
 			amount, base_amount = self.get_tax_amounts(tax, None)
@@ -1248,15 +1246,6 @@ class PurchaseInvoice(BuyingController):
 							item=tax,
 						)
 					)
-
-	@property
-	def enable_discount_accounting(self):
-		if not hasattr(self, "_enable_discount_accounting"):
-			self._enable_discount_accounting = cint(
-				frappe.db.get_single_value("Buying Settings", "enable_discount_accounting")
-			)
-
-		return self._enable_discount_accounting
 
 	def make_internal_transfer_gl_entries(self, gl_entries):
 		if self.is_internal_transfer() and flt(self.base_total_taxes_and_charges):

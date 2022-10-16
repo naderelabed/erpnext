@@ -648,6 +648,16 @@ def unlink_ref_doc_from_payment_entries(ref_doc):
 		(now(), frappe.session.user, ref_doc.doctype, ref_doc.name),
 	)
 
+	ple = qb.DocType("Payment Ledger Entry")
+
+	qb.update(ple).set(ple.against_voucher_type, ple.voucher_type).set(
+		ple.against_voucher_no, ple.voucher_no
+	).set(ple.modified, now()).set(ple.modified_by, frappe.session.user).where(
+		(ple.against_voucher_type == ref_doc.doctype)
+		& (ple.against_voucher_no == ref_doc.name)
+		& (ple.delinked == 0)
+	).run()
+
 	if ref_doc.doctype in ("Sales Invoice", "Purchase Invoice"):
 		ref_doc.set("advances", [])
 
@@ -1161,6 +1171,10 @@ def _delete_gl_entries(voucher_type, voucher_no):
 		where voucher_type=%s and voucher_no=%s""",
 		(voucher_type, voucher_no),
 	)
+	ple = qb.DocType("Payment Ledger Entry")
+	qb.from_(ple).delete().where(
+		(ple.voucher_type == voucher_type) & (ple.voucher_no == voucher_no)
+	).run()
 
 
 def sort_stock_vouchers_by_posting_date(

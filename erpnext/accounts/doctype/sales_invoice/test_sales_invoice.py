@@ -965,7 +965,8 @@ class TestSalesInvoice(unittest.TestCase):
 		pos_return.insert()
 		pos_return.submit()
 
-		self.assertEqual(pos_return.get("payments")[0].amount, -1000)
+		self.assertEqual(pos_return.get("payments")[0].amount, -500)
+		self.assertEqual(pos_return.get("payments")[1].amount, -500)
 
 	def test_pos_change_amount(self):
 		make_pos_profile(
@@ -2728,6 +2729,31 @@ class TestSalesInvoice(unittest.TestCase):
 
 		check_gl_entries(self, si.name, expected_gle, add_days(nowdate(), -1))
 
+		# Update Invoice post submit and then check GL Entries again
+
+		si.load_from_db()
+		si.items[0].income_account = "Service - _TC"
+		si.additional_discount_account = "_Test Account Sales - _TC"
+		si.taxes[0].account_head = "TDS Payable - _TC"
+		si.save()
+
+		si.load_from_db()
+		self.assertTrue(si.repost_required)
+
+		si.repost_accounting_entries()
+
+		expected_gle = [
+			["_Test Account Sales - _TC", 22.0, 0.0, nowdate()],
+			["Debtors - _TC", 88, 0.0, nowdate()],
+			["Service - _TC", 0.0, 100.0, nowdate()],
+			["TDS Payable - _TC", 0.0, 10.0, nowdate()],
+		]
+
+		check_gl_entries(self, si.name, expected_gle, add_days(nowdate(), -1))
+
+		si.load_from_db()
+		self.assertFalse(si.repost_required)
+
 	def test_asset_depreciation_on_sale_with_pro_rata(self):
 		"""
 		Tests if an Asset set to depreciate yearly on June 30, that gets sold on Sept 30, creates an additional depreciation entry on its date of sale.
@@ -3228,6 +3254,22 @@ class TestSalesInvoice(unittest.TestCase):
 
 		self.assertTrue(return_si.docstatus == 1)
 
+	def test_sales_invoice_with_payable_tax_account(self):
+		si = create_sales_invoice(do_not_submit=True)
+		si.append(
+			"taxes",
+			{
+				"charge_type": "Actual",
+				"account_head": "Creditors - _TC",
+				"description": "Test",
+				"cost_center": "Main - _TC",
+				"tax_amount": 10,
+				"total": 10,
+				"dont_recompute_tax": 0,
+			},
+		)
+		self.assertRaises(frappe.ValidationError, si.submit)
+
 
 def get_sales_invoice_for_e_invoice():
 	si = make_sales_invoice_for_ewaybill()
@@ -3269,6 +3311,7 @@ def check_gl_entries(doc, voucher_no, expected_gle, posting_date):
 		"""select account, debit, credit, posting_date
 		from `tabGL Entry`
 		where voucher_type='Sales Invoice' and voucher_no=%s and posting_date > %s
+		and is_cancelled = 0
 		order by posting_date asc, account asc""",
 		(voucher_no, posting_date),
 		as_dict=1,
@@ -3320,7 +3363,7 @@ def create_sales_invoice(**args):
 			"asset": args.asset or None,
 			"cost_center": args.cost_center or "_Test Cost Center - _TC",
 			"serial_no": args.serial_no,
-			"conversion_factor": 1,
+			"conversion_factor": args.get("conversion_factor", 1),
 			"incoming_rate": args.incoming_rate or 0,
 			"batch_no": args.batch_no or None,
 		},

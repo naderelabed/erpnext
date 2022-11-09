@@ -67,6 +67,9 @@ class PurchaseInvoice(BuyingController):
 		supplier_tds = frappe.db.get_value("Supplier", self.supplier, "tax_withholding_category")
 		self.set_onload("supplier_tds", supplier_tds)
 
+		if self.is_new():
+			self.set("tax_withheld_vouchers", [])
+
 	def before_save(self):
 		if not self.on_hold:
 			self.release_date = ""
@@ -1368,7 +1371,14 @@ class PurchaseInvoice(BuyingController):
 		frappe.db.set(self, "status", "Cancelled")
 
 		unlink_inter_company_doc(self.doctype, self.name, self.inter_company_invoice_reference)
-		self.ignore_linked_doctypes = ("GL Entry", "Stock Ledger Entry", "Repost Item Valuation")
+
+		self.ignore_linked_doctypes = (
+			"GL Entry",
+			"Stock Ledger Entry",
+			"Repost Item Valuation",
+			"Tax Withheld Vouchers",
+		)
+
 		self.update_advance_tax_references(cancel=1)
 
 	def update_project(self):

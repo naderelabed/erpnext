@@ -916,7 +916,8 @@ class TestSalesInvoice(unittest.TestCase):
 		pos_return.insert()
 		pos_return.submit()
 
-		self.assertEqual(pos_return.get("payments")[0].amount, -1000)
+		self.assertEqual(pos_return.get("payments")[0].amount, -500)
+		self.assertEqual(pos_return.get("payments")[1].amount, -500)
 
 	def test_pos_change_amount(self):
 		make_pos_profile(
@@ -3729,7 +3730,7 @@ def create_sales_invoice(**args):
 			"discount_amount": args.discount_amount or 0,
 			"cost_center": args.cost_center or "_Test Cost Center - _TC",
 			"serial_no": args.serial_no,
-			"conversion_factor": 1,
+			"conversion_factor": args.get("conversion_factor", 1),
 			"incoming_rate": args.incoming_rate or 0,
 			"batch_no": args.batch_no or None,
 		},

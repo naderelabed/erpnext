@@ -173,7 +173,9 @@ class PurchaseReceipt(BuyingController):
 		)
 
 		if (
-			cint(frappe.db.get_single_value("Buying Settings", "maintain_same_rate")) and not self.is_return
+			cint(frappe.db.get_single_value("Buying Settings", "maintain_same_rate"))
+			and not self.is_return
+			and not self.is_internal_supplier
 		):
 			self.validate_rate_with_reference_doc(
 				[["Purchase Order", "purchase_order", "purchase_order_item"]]
@@ -886,7 +888,7 @@ def update_billing_percentage(pr_doc, update_modified=True):
 	# Update Billing % based on pending accepted qty
 	total_amount, total_billed_amount = 0, 0
 	for item in pr_doc.items:
-		return_data = frappe.db.get_list(
+		return_data = frappe.get_all(
 			"Purchase Receipt",
 			fields=["sum(abs(`tabPurchase Receipt Item`.qty)) as qty"],
 			filters=[

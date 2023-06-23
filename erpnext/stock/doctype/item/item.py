@@ -117,7 +117,6 @@ class Item(Document):
 		self.validate_auto_reorder_enabled_in_stock_settings()
 		self.cant_change()
 		self.validate_item_tax_net_rate_range()
-		set_item_tax_from_hsn_code(self)
 
 		if not self.is_new():
 			self.old_item_group = frappe.db.get_value(self.doctype, self.name, "item_group")
@@ -352,13 +351,18 @@ class Item(Document):
 		check_list = []
 		for d in self.get("taxes"):
 			if d.item_tax_template:
-				if d.item_tax_template in check_list:
-					frappe.throw(_("{0} entered twice in Item Tax").format(d.item_tax_template))
+				if (d.item_tax_template, d.tax_category) in check_list:
+					frappe.throw(
+						_("{0} entered twice {1} in Item Taxes").format(
+							frappe.bold(d.item_tax_template),
+							"for tax category {0}".format(frappe.bold(d.tax_category)) if d.tax_category else "",
+						)
+					)
 				else:
-					check_list.append(d.item_tax_template)
+					check_list.append((d.item_tax_template, d.tax_category))
 
 	def validate_barcode(self):
-		from stdnum import ean
+		import barcodenumber
 
 		if len(self.barcodes) > 0:
 			for item_barcode in self.barcodes:
@@ -376,19 +380,18 @@ class Item(Document):
 					item_barcode.barcode_type = (
 						"" if item_barcode.barcode_type not in options else item_barcode.barcode_type
 					)
-					if item_barcode.barcode_type and item_barcode.barcode_type.upper() in (
-						"EAN",
-						"UPC-A",
-						"EAN-13",
-						"EAN-8",
-					):
-						if not ean.is_valid(item_barcode.barcode):
-							frappe.throw(
-								_("Barcode {0} is not a valid {1} code").format(
-									item_barcode.barcode, item_barcode.barcode_type
-								),
-								InvalidBarcode,
-							)
+					if item_barcode.barcode_type:
+						barcode_type = convert_erpnext_to_barcodenumber(
+							item_barcode.barcode_type.upper(), item_barcode.barcode
+						)
+						if barcode_type in barcodenumber.barcodes():
+							if not barcodenumber.check_code(barcode_type, item_barcode.barcode):
+								frappe.throw(
+									_("Barcode {0} is not a valid {1} code").format(
+										item_barcode.barcode, item_barcode.barcode_type
+									),
+									InvalidBarcode,
+								)
 
 	def validate_warehouse_for_reorder(self):
 		"""Validate Reorder level table for duplicate and conditional mandatory"""
@@ -582,7 +585,7 @@ class Item(Document):
 		existing_allow_negative_stock = frappe.db.get_value(
 			"Stock Settings", None, "allow_negative_stock"
 		)
-		frappe.db.set_value("Stock Settings", None, "allow_negative_stock", 1)
+		frappe.db.set_single_value("Stock Settings", "allow_negative_stock", 1)
 
 		repost_stock_for_warehouses = frappe.get_all(
 			"Stock Ledger Entry",
@@ -598,8 +601,8 @@ class Item(Document):
 		for warehouse in repost_stock_for_warehouses:
 			repost_stock(new_name, warehouse)
 
-		frappe.db.set_value(
-			"Stock Settings", None, "allow_negative_stock", existing_allow_negative_stock
+		frappe.db.set_single_value(
+			"Stock Settings", "allow_negative_stock", existing_allow_negative_stock
 		)
 
 	def update_bom_item_desc(self):
@@ -711,6 +714,7 @@ class Item(Document):
 						template=self,
 						now=frappe.flags.in_test,
 						timeout=600,
+						enqueue_after_commit=True,
 					)
 
 	def validate_has_variants(self):
@@ -983,6 +987,31 @@ class Item(Document):
 					title=_("Enable Auto Re-Order"),
 					indicator="orange",
 				)
+
+
+def convert_erpnext_to_barcodenumber(erpnext_number, barcode):
+	if erpnext_number == "EAN":
+		ean_type = {
+			8: "EAN8",
+			13: "EAN13",
+		}
+		barcode_length = len(barcode)
+		if barcode_length in ean_type:
+			return ean_type[barcode_length]
+
+		return erpnext_number
+
+	convert = {
+		"UPC-A": "UPCA",
+		"CODE-39": "CODE39",
+		"ISBN-10": "ISBN10",
+		"ISBN-13": "ISBN13",
+	}
+
+	if erpnext_number in convert:
+		return convert[erpnext_number]
+
+	return erpnext_number
 
 
 def make_item_price(item, price_list_name, item_price):
@@ -1290,11 +1319,6 @@ def update_variants(variants, template, publish_progress=True):
 		variant.save()
 		if publish_progress:
 			frappe.publish_progress(count / total * 100, title=_("Updating Variants..."))
-
-
-@erpnext.allow_regional
-def set_item_tax_from_hsn_code(item):
-	pass
 
 
 def validate_item_default_company_links(item_defaults: List[ItemDefault]) -> None:

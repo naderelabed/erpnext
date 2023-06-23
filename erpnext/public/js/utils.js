@@ -221,9 +221,9 @@ $.extend(erpnext.utils, {
 			callback: function(r) {
 				if (r.message && r.message.length) {
 					r.message.forEach((dimension) => {
-						let found = filters.some(el => el.fieldname === dimension['fieldname']);
+						let existing_filter = filters.filter(el => el.fieldname === dimension['fieldname']);
 
-						if (!found) {
+						if (!existing_filter.length) {
 							filters.splice(index, 0, {
 								"fieldname": dimension["fieldname"],
 								"label": __(dimension["doctype"]),
@@ -232,6 +232,11 @@ $.extend(erpnext.utils, {
 									return frappe.db.get_link_options(dimension["doctype"], txt);
 								},
 							});
+						} else {
+							existing_filter[0]['fieldtype'] = "MultiSelectList";
+							existing_filter[0]['get_data'] = function(txt) {
+								return frappe.db.get_link_options(dimension["doctype"], txt);
+							}
 						}
 					});
 				}
@@ -345,6 +350,38 @@ $.extend(erpnext.utils, {
 		}
 
 	},
+
+	pick_serial_and_batch_bundle(frm, cdt, cdn, type_of_transaction, warehouse_field) {
+		let item_row = frappe.get_doc(cdt, cdn);
+		item_row.type_of_transaction = type_of_transaction;
+
+		frappe.db.get_value("Item", item_row.item_code, ["has_batch_no", "has_serial_no"])
+			.then((r) => {
+				item_row.has_batch_no = r.message.has_batch_no;
+				item_row.has_serial_no = r.message.has_serial_no;
+
+				frappe.require("assets/erpnext/js/utils/serial_no_batch_selector.js", function() {
+					new erpnext.SerialBatchPackageSelector(frm, item_row, (r) => {
+						if (r) {
+							let update_values = {
+								"serial_and_batch_bundle": r.name,
+								"qty": Math.abs(r.total_qty)
+							}
+
+							if (!warehouse_field) {
+								warehouse_field = "warehouse";
+							}
+
+							if (r.warehouse) {
+								update_values[warehouse_field] = r.warehouse;
+							}
+
+							frappe.model.set_value(item_row.doctype, item_row.name, update_values);
+						}
+					});
+				});
+		});
+	}
 });
 
 erpnext.utils.select_alternate_items = function(opts) {

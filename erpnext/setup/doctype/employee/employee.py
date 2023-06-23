@@ -8,7 +8,6 @@ from frappe.permissions import (
 	get_doc_permissions,
 	has_permission,
 	remove_user_permission,
-	set_user_permission_if_allowed,
 )
 from frappe.utils import cstr, getdate, today, validate_email_address
 from frappe.utils.nestedset import NestedSet
@@ -96,7 +95,7 @@ class Employee(NestedSet):
 			return
 
 		add_user_permission("Employee", self.name, self.user_id)
-		set_user_permission_if_allowed("Company", self.company, self.user_id)
+		add_user_permission("Company", self.company, self.user_id)
 
 	def update_user(self):
 		# add employee role if missing
@@ -258,7 +257,9 @@ def get_employee_email(employee_doc):
 
 def get_holiday_list_for_employee(employee, raise_exception=True):
 	if employee:
-		holiday_list, company = frappe.db.get_value("Employee", employee, ["holiday_list", "company"])
+		holiday_list, company = frappe.get_cached_value(
+			"Employee", employee, ["holiday_list", "company"]
+		)
 	else:
 		holiday_list = ""
 		company = frappe.db.get_single_value("Global Defaults", "default_company")

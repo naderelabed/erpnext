@@ -1217,6 +1217,8 @@ class TestSalesOrder(FrappeTestCase):
 		self.assertTrue(si.get("payment_schedule"))
 
 	def test_make_work_order(self):
+		from erpnext.selling.doctype.sales_order.sales_order import get_work_order_items
+
 		# Make a new Sales Order
 		so = make_sales_order(
 			**{
@@ -1230,7 +1232,7 @@ class TestSalesOrder(FrappeTestCase):
 		# Raise Work Orders
 		po_items = []
 		so_item_name = {}
-		for item in so.get_work_order_items():
+		for item in get_work_order_items(so.name):
 			po_items.append(
 				{
 					"warehouse": item.get("warehouse"),
@@ -1448,6 +1450,7 @@ class TestSalesOrder(FrappeTestCase):
 
 		from erpnext.controllers.item_variant import create_variant
 		from erpnext.manufacturing.doctype.production_plan.test_production_plan import make_bom
+		from erpnext.selling.doctype.sales_order.sales_order import get_work_order_items
 
 		make_item(  # template item
 			"Test-WO-Tshirt",
@@ -1487,7 +1490,7 @@ class TestSalesOrder(FrappeTestCase):
 				]
 			}
 		)
-		wo_items = so.get_work_order_items()
+		wo_items = get_work_order_items(so.name)
 
 		self.assertEqual(wo_items[0].get("item_code"), "Test-WO-Tshirt-R")
 		self.assertEqual(wo_items[0].get("bom"), red_var_bom.name)
@@ -1497,6 +1500,8 @@ class TestSalesOrder(FrappeTestCase):
 		self.assertEqual(wo_items[1].get("bom"), template_bom.name)
 
 	def test_request_for_raw_materials(self):
+		from erpnext.selling.doctype.sales_order.sales_order import get_work_order_items
+
 		item = make_item(
 			"_Test Finished Item",
 			{
@@ -1529,7 +1534,7 @@ class TestSalesOrder(FrappeTestCase):
 		so = make_sales_order(**{"item_list": [{"item_code": item.item_code, "qty": 1, "rate": 1000}]})
 		so.submit()
 		mr_dict = frappe._dict()
-		items = so.get_work_order_items(1)
+		items = get_work_order_items(so.name, 1)
 		mr_dict["items"] = items
 		mr_dict["include_exploded_items"] = 0
 		mr_dict["ignore_existing_ordered_qty"] = 1
@@ -1872,6 +1877,106 @@ class TestSalesOrder(FrappeTestCase):
 		self.assertEqual(pe.references[0].allocated_amount, 200)
 		self.assertEqual(pe.references[1].reference_name, so.name)
 		self.assertEqual(pe.references[1].allocated_amount, 300)
+
+	def test_delivered_item_material_request(self):
+		"SO -> MR (Manufacture) -> WO. Test if WO Qty is updated in SO."
+		from erpnext.manufacturing.doctype.work_order.work_order import (
+			make_stock_entry as make_se_from_wo,
+		)
+		from erpnext.stock.doctype.material_request.material_request import raise_work_orders
+
+		so = make_sales_order(
+			item_list=[
+				{"item_code": "_Test FG Item", "qty": 10, "rate": 100, "warehouse": "Work In Progress - _TC"}
+			]
+		)
+
+		make_stock_entry(
+			item_code="_Test FG Item", target="Work In Progress - _TC", qty=4, basic_rate=100
+		)
+
+		dn = make_delivery_note(so.name)
+		dn.items[0].qty = 4
+		dn.submit()
+
+		so.load_from_db()
+		self.assertEqual(so.items[0].delivered_qty, 4)
+
+		mr = make_material_request(so.name)
+		mr.material_request_type = "Purchase"
+		mr.schedule_date = today()
+		mr.save()
+
+		self.assertEqual(mr.items[0].qty, 6)
+
+	def test_packed_items_for_partial_sales_order(self):
+		# test Update Items with product bundle
+		for product_bundle in [
+			"_Test Product Bundle Item Partial 1",
+			"_Test Product Bundle Item Partial 2",
+		]:
+			if not frappe.db.exists("Item", product_bundle):
+				bundle_item = make_item(product_bundle, {"is_stock_item": 0})
+				bundle_item.append(
+					"item_defaults", {"company": "_Test Company", "default_warehouse": "_Test Warehouse - _TC"}
+				)
+				bundle_item.save(ignore_permissions=True)
+
+		for product_bundle in ["_Packed Item Partial 1", "_Packed Item Partial 2"]:
+			if not frappe.db.exists("Item", product_bundle):
+				make_item(product_bundle, {"is_stock_item": 1, "stock_uom": "Nos"})
+
+			make_stock_entry(item=product_bundle, target="_Test Warehouse - _TC", qty=2, rate=10)
+
+		make_product_bundle("_Test Product Bundle Item Partial 1", ["_Packed Item Partial 1"], 1)
+
+		make_product_bundle("_Test Product Bundle Item Partial 2", ["_Packed Item Partial 2"], 1)
+
+		so = make_sales_order(
+			item_code="_Test Product Bundle Item Partial 1",
+			warehouse="_Test Warehouse - _TC",
+			qty=1,
+			uom="Nos",
+			stock_uom="Nos",
+			conversion_factor=1,
+			transaction_date=nowdate(),
+			delivery_note=nowdate(),
+			do_not_submit=1,
+		)
+
+		so.append(
+			"items",
+			{
+				"item_code": "_Test Product Bundle Item Partial 2",
+				"warehouse": "_Test Warehouse - _TC",
+				"qty": 1,
+				"uom": "Nos",
+				"stock_uom": "Nos",
+				"conversion_factor": 1,
+				"delivery_note": nowdate(),
+			},
+		)
+
+		so.save()
+		so.submit()
+
+		dn = make_delivery_note(so.name)
+		dn.remove(dn.items[1])
+		dn.save()
+		dn.submit()
+
+		self.assertEqual(len(dn.items), 1)
+		self.assertEqual(len(dn.packed_items), 1)
+		self.assertEqual(dn.items[0].item_code, "_Test Product Bundle Item Partial 1")
+
+		so.load_from_db()
+
+		dn = make_delivery_note(so.name)
+		dn.save()
+
+		self.assertEqual(len(dn.items), 1)
+		self.assertEqual(len(dn.packed_items), 1)
+		self.assertEqual(dn.items[0].item_code, "_Test Product Bundle Item Partial 2")
 
 
 def automatically_fetch_payment_terms(enable=1):
